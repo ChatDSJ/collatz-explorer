@@ -2,7 +2,7 @@
  * Phase 2: Life & Motion tests.
  *
  * Tests for animation system, path tracing, camera, geometric layout,
- * zoom emergence, and edge labels.
+ * zoom emergence, edge labels, and click-to-foreground.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -11,6 +11,7 @@ import {
   buildInverseTree,
   isPowerOf2,
   getPathEdgeKeys,
+  getDescendants,
 } from '../src/engine/collatz';
 import { layoutTree } from '../src/layout/reingold-tilford';
 import {
@@ -58,11 +59,11 @@ describe('path tracing', () => {
   });
 });
 
-// ── Geometric layout ──────────────────────────────────────────────────
+// ── Geometric layout with decay ───────────────────────────────────────
 
 describe('geometric layout', () => {
   const tree = buildInverseTree(5000, 40);
-  const layout = layoutTree(tree, 80);
+  const layout = layoutTree(tree, 100);
 
   it('spine grows upward (y decreases with depth)', () => {
     const spineValues = [1, 2, 4, 8, 16, 32, 64, 128];
@@ -83,7 +84,7 @@ describe('geometric layout', () => {
     expect(node64.x).toBeLessThan(node16.x);
   });
 
-  it('spine angle is exactly 30° from vertical', () => {
+  it('spine angle is 30° from vertical', () => {
     const node1 = layout.nodes.get(1)!;
     const node2 = layout.nodes.get(2)!;
     const dx = Math.abs(node2.x - node1.x);
@@ -145,13 +146,34 @@ describe('geometric layout', () => {
     expect(layout.bounds.minX).toBeLessThan(layout.bounds.maxX);
     expect(layout.bounds.minY).toBeLessThan(layout.bounds.maxY);
   });
+
+  it('nodes 20 and 21 are NOT at the same position (decay fixes collision)', () => {
+    const node20 = layout.nodes.get(20)!;
+    const node21 = layout.nodes.get(21)!;
+    const dist = Math.hypot(node20.x - node21.x, node20.y - node21.y);
+    expect(dist).toBeGreaterThan(5); // should be ~14px apart
+  });
+
+  it('decay creates smaller steps at deeper levels', () => {
+    // Spine step from 1→2 (depth 0) should be larger than 64→128 (depth 6)
+    const n1 = layout.nodes.get(1)!;
+    const n2 = layout.nodes.get(2)!;
+    const n64 = layout.nodes.get(64)!;
+    const n128 = layout.nodes.get(128)!;
+
+    const step1 = Math.hypot(n2.x - n1.x, n2.y - n1.y);
+    const step6 = Math.hypot(n128.x - n64.x, n128.y - n64.y);
+
+    expect(step1).toBeGreaterThan(step6);
+    expect(step6 / step1).toBeCloseTo(0.93 ** 6, 2);
+  });
 });
 
 // ── Layout has path nodes ─────────────────────────────────────────────
 
 describe('layout has path nodes', () => {
   const tree = buildInverseTree(5000, 40);
-  const layout = layoutTree(tree, 80);
+  const layout = layoutTree(tree, 100);
 
   it('fundamental nodes are in the layout', () => {
     expect(layout.nodes.has(1)).toBe(true);
@@ -167,6 +189,53 @@ describe('layout has path nodes', () => {
       if (nodeA && nodeB) {
         expect(nodeB.y).toBeLessThan(nodeA.y);
       }
+    }
+  });
+});
+
+// ── getDescendants (click-to-foreground) ──────────────────────────────
+
+describe('getDescendants', () => {
+  const tree = buildInverseTree(5000, 40);
+
+  it('root (1) returns all nodes in the tree', () => {
+    const descendants = getDescendants(1, tree);
+    expect(descendants.size).toBe(tree.size);
+  });
+
+  it('includes the root itself', () => {
+    const descendants = getDescendants(16, tree);
+    expect(descendants.has(16)).toBe(true);
+  });
+
+  it('node 16 descendants include 32, 5, and their subtrees', () => {
+    const descendants = getDescendants(16, tree);
+    expect(descendants.has(32)).toBe(true); // left child (div2)
+    expect(descendants.has(5)).toBe(true);  // right child (3np1)
+    expect(descendants.has(64)).toBe(true); // grandchild 32→64
+    expect(descendants.has(10)).toBe(true); // grandchild 5→10
+  });
+
+  it('node 5 descendants do NOT include node 16 (its parent)', () => {
+    const descendants = getDescendants(5, tree);
+    expect(descendants.has(5)).toBe(true);
+    expect(descendants.has(10)).toBe(true);  // child
+    expect(descendants.has(16)).toBe(false); // parent — not a descendant!
+  });
+
+  it('leaf nodes return just themselves', () => {
+    // Find a leaf node (no children)
+    let leaf = 0;
+    for (const [value, node] of tree) {
+      if (node.children.length === 0) {
+        leaf = value;
+        break;
+      }
+    }
+    if (leaf > 0) {
+      const descendants = getDescendants(leaf, tree);
+      expect(descendants.size).toBe(1);
+      expect(descendants.has(leaf)).toBe(true);
     }
   });
 });

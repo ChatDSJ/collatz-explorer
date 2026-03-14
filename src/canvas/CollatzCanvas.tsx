@@ -4,20 +4,21 @@
  * - Continuous zoom emergence (details smoothly appear/disappear)
  * - Arrow pulse animations
  * - Path tracing (click to highlight journey to 1)
+ * - Click-to-foreground (selected subtree pops forward)
  * - Smooth camera transitions
  * - Edge operation labels (÷2, 3n+1)
  * - Even/odd detail rings and step badges at close zoom
  */
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Application, Container } from 'pixi.js';
 import { THEMES, getZoomLevel } from '../types';
 import type { Theme, ZoomLevel } from '../types';
-import { buildInverseTree, getEdges, isPowerOf2 } from '../engine/collatz';
+import { buildInverseTree, getEdges, getDescendants } from '../engine/collatz';
 import type { CollatzNode } from '../engine/collatz';
 import { layoutTree } from '../layout/reingold-tilford';
 import type { LayoutNode } from '../layout/reingold-tilford';
-import { renderNodes, updateNodeZoom } from './nodes';
+import { renderNodes, updateNodeZoom, setSubtreeForeground } from './nodes';
 import { renderArrows } from './arrows';
 import { ArrowAnimationSystem } from './animation';
 import type { AnimationStyle } from './animation';
@@ -62,6 +63,7 @@ export default function CollatzCanvas({
   const cameraRef = useRef<CameraSystem | null>(null);
   const pathTraceRef = useRef<PathTraceResult | null>(null);
   const edgeLabelsRef = useRef<EdgeLabelSystem | null>(null);
+  const arrowContainerRef = useRef<Container | null>(null);
   const [isReady, setIsReady] = useState(false);
 
   const theme = THEMES[themeName] ?? THEMES['midnight']!;
@@ -93,7 +95,7 @@ export default function CollatzCanvas({
 
       // Build Collatz tree
       const treeNodes = buildInverseTree(5000, 40);
-      const layout = layoutTree(treeNodes, 80);
+      const layout = layoutTree(treeNodes, 100);
       const edges = getEdges(treeNodes);
 
       // Create world container (everything moves together)
@@ -104,6 +106,7 @@ export default function CollatzCanvas({
       // Render arrows first (behind nodes)
       const { container: arrowContainer, arrowData } = renderArrows(edges, layout.nodes, theme);
       world.addChild(arrowContainer);
+      arrowContainerRef.current = arrowContainer;
 
       // Animation overlay (between arrows and nodes)
       const animSystem = new ArrowAnimationSystem(theme);
@@ -237,6 +240,7 @@ export default function CollatzCanvas({
         appRef.current.destroy(true);
         appRef.current = null;
       }
+      arrowContainerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themeName]);
@@ -261,7 +265,7 @@ export default function CollatzCanvas({
     }
   }, [jumpToNumber]);
 
-  // Handle selectedNumber — path tracing
+  // Handle selectedNumber — path tracing + subtree foreground
   useEffect(() => {
     const world = worldRef.current;
     const state = stateRef.current;
@@ -274,7 +278,18 @@ export default function CollatzCanvas({
       pathTraceRef.current = null;
     }
 
-    if (selectedNumber == null) return;
+    if (selectedNumber == null) {
+      // Clear foreground — reset all z-ordering and dimming
+      setSubtreeForeground(null);
+      if (arrowContainerRef.current) arrowContainerRef.current.alpha = 1;
+      if (animSystemRef.current) animSystemRef.current.displayObject.alpha = 1;
+      if (edgeLabelsRef.current) edgeLabelsRef.current.container.alpha = 1;
+
+      // Re-run zoom emergence to restore normal alphas
+      const scale = state.viewport.scale;
+      updateNodeZoom(scale, theme);
+      return;
+    }
 
     // Create new path trace
     const selected: number = selectedNumber;
@@ -284,6 +299,19 @@ export default function CollatzCanvas({
       world.addChildAt(trace.container, Math.min(3, world.children.length));
       pathTraceRef.current = trace;
     }
+
+    // Bring clicked node's subtree to foreground
+    const descendants = getDescendants(selected, state.treeNodes);
+    setSubtreeForeground(descendants);
+
+    // Dim arrows and labels that aren't part of the selection
+    if (arrowContainerRef.current) arrowContainerRef.current.alpha = 0.15;
+    if (animSystemRef.current) animSystemRef.current.displayObject.alpha = 0.15;
+    if (edgeLabelsRef.current) edgeLabelsRef.current.container.alpha = 0.15;
+
+    // Re-run zoom emergence to apply foreground dimming
+    const scale = state.viewport.scale;
+    updateNodeZoom(scale, theme);
 
     // Fly camera to the selected node
     const layoutNode = state.layoutNodes.get(selected);

@@ -5,14 +5,17 @@
  *   Left child  (×2, spine) → 30° left of vertical (steep, dominant)
  *   Right child ((n-1)/3)   → 60° right of vertical (shallow, branching)
  *
+ * A depth-dependent decay factor makes step sizes shrink at each level.
+ * This breaks vector-sum commutativity, ensuring every node gets a unique
+ * position (paths LLLLRLL and LLLLLLR now produce different coordinates).
+ * It also creates a fractal quality: deeper subtrees are smaller.
+ *
  * Design principles:
  * - All arrows point UPWARD from root — no horizontal arrows ever
  * - Subtree overlap is allowed and expected (the tree is compact)
  * - Z-ordering handles depth: spine nodes and closer-to-root nodes on top
  * - The powers-of-2 spine forms a clear 30° diagonal going up-left
  * - Right branches fan out to the upper-right at 60° from vertical
- *
- * This replaces Reingold-Tilford: no subtree separation, just pure geometry.
  */
 
 import type { CollatzNode } from '../engine/collatz';
@@ -42,17 +45,30 @@ const SPINE_ANGLE = Math.PI / 6; // 30°
 /** Branch angle: 60° from vertical (going up-right) */
 const BRANCH_ANGLE = Math.PI / 3; // 60°
 
-// Unit direction vectors (will be scaled by levelHeight)
+/**
+ * Depth decay factor: step size at depth d = levelHeight × DECAY^d.
+ *
+ * This is critical for correctness. Without decay, vector addition is
+ * commutative (paths with same L/R count land on the same pixel).
+ * With DECAY < 1, each step has a unique magnitude → unique positions.
+ *
+ * 0.93 gives good separation (~14px between depth-7 siblings) while
+ * keeping the tree compact and fractal-looking.
+ */
+const DECAY = 0.93;
+
+// Unit direction vectors (will be scaled by levelHeight × DECAY^depth)
 const SPINE_DX = -Math.sin(SPINE_ANGLE);   // -0.500
 const SPINE_DY = -Math.cos(SPINE_ANGLE);   // -0.866
 const BRANCH_DX = Math.sin(BRANCH_ANGLE);  //  0.866
 const BRANCH_DY = -Math.cos(BRANCH_ANGLE); // -0.500
 
 /**
- * Layout the inverse Collatz binary tree using fixed geometric angles.
+ * Layout the inverse Collatz binary tree using fixed geometric angles
+ * with depth-dependent decay.
  *
- * @param nodes     - The tree from buildInverseTree()
- * @param levelHeight - Pixel distance per tree level (default 80)
+ * @param nodes       - The tree from buildInverseTree()
+ * @param levelHeight - Base pixel distance per tree level (default 80)
  */
 export function layoutTree(
   nodes: Map<number, CollatzNode>,
@@ -63,13 +79,7 @@ export function layoutTree(
   const layoutNodes = new Map<number, LayoutNode>();
   let minX = 0, maxX = 0, minY = 0, maxY = 0;
 
-  // Scaled direction vectors
-  const sDx = SPINE_DX * levelHeight;
-  const sDy = SPINE_DY * levelHeight;
-  const bDx = BRANCH_DX * levelHeight;
-  const bDy = BRANCH_DY * levelHeight;
-
-  // BFS from root — each node's position = parent + direction vector
+  // BFS from root — each node's position = parent + direction × step(depth)
   const queue: Array<{ value: number; x: number; y: number; depth: number }> = [];
   queue.push({ value: 1, x: 0, y: 0, depth: 0 });
 
@@ -87,9 +97,11 @@ export function layoutTree(
     if (y < minY) minY = y;
     if (y > maxY) maxY = y;
 
-    // Place children
+    // Place children with decay-scaled step
     const node = nodes.get(value);
     if (!node) continue;
+
+    const step = levelHeight * Math.pow(DECAY, depth);
 
     for (const childValue of node.children) {
       if (layoutNodes.has(childValue)) continue;
@@ -101,16 +113,16 @@ export function layoutTree(
         // Left child (spine direction): 30° up-left
         queue.push({
           value: childValue,
-          x: x + sDx,
-          y: y + sDy,
+          x: x + SPINE_DX * step,
+          y: y + SPINE_DY * step,
           depth: depth + 1,
         });
       } else {
         // Right child (branch direction): 60° up-right
         queue.push({
           value: childValue,
-          x: x + bDx,
-          y: y + bDy,
+          x: x + BRANCH_DX * step,
+          y: y + BRANCH_DY * step,
           depth: depth + 1,
         });
       }

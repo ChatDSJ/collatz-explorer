@@ -188,6 +188,32 @@ export function getSpine(maxValue: number): number[] {
 }
 
 /**
+ * Get all descendants of a node in the inverse tree (BFS).
+ * Includes the root node itself.
+ */
+export function getDescendants(
+  root: number,
+  tree: Map<number, CollatzNode>,
+): Set<number> {
+  const result = new Set<number>();
+  const queue = [root];
+  while (queue.length > 0) {
+    const val = queue.shift()!;
+    if (result.has(val)) continue;
+    result.add(val);
+    const node = tree.get(val);
+    if (node) {
+      for (const child of node.children) {
+        if (!result.has(child)) {
+          queue.push(child);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Compute which edges belong to a Collatz path.
  * Returns a Set of "from→to" keys for fast lookup.
  * Both directions are included since tree edges go child→parent.

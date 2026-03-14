@@ -6,6 +6,7 @@
  * - Whether it's on the spine (power of 2)
  * - Whether it's selected
  * - Current zoom level (continuous alpha-based emergence)
+ * - Whether it's in the foreground subtree (click-to-foreground)
  *
  * Detail layers emerge smoothly as zoom increases:
  * - Nodes → Labels → Edge-op context → Even/odd rings → Step badges
@@ -36,6 +37,7 @@ interface NodeSprite {
   value: number;
   isSpine: boolean;
   isEven: boolean;
+  depth: number;
   /** Detail ring (even/odd indicator) — created lazily */
   detailRing: Graphics | null;
   /** Step badge — created lazily */
@@ -43,6 +45,13 @@ interface NodeSprite {
 }
 
 const nodeSprites: Map<number, NodeSprite> = new Map();
+
+/**
+ * The currently foregrounded subtree (or null for default).
+ * When set, nodes in this set get high z-index and full opacity;
+ * other nodes are dimmed and pushed to background.
+ */
+let currentForeground: Set<number> | null = null;
 
 /**
  * Render all nodes in the tree.
@@ -96,12 +105,17 @@ export function renderNodes(
     nodeContainer.on('pointerover', () => {
       circle.clear();
       drawNodeCircle(circle, radius * 1.15, isSpine, theme, true);
-      nodeContainer.zIndex = 1000;
+      nodeContainer.zIndex = 2000; // hover always on top
     });
     nodeContainer.on('pointerout', () => {
       circle.clear();
       drawNodeCircle(circle, radius, isSpine, theme, false);
-      nodeContainer.zIndex = 0;
+      // Restore z-index based on foreground state
+      if (currentForeground) {
+        nodeContainer.zIndex = currentForeground.has(value) ? 1000 - layoutNode.depth : -1;
+      } else {
+        nodeContainer.zIndex = 0;
+      }
     });
 
     container.addChild(nodeContainer);
@@ -113,6 +127,7 @@ export function renderNodes(
       value,
       isSpine,
       isEven: value % 2 === 0,
+      depth: layoutNode.depth,
       detailRing: null,
       stepBadge: null,
     });
@@ -140,8 +155,32 @@ function drawNodeCircle(
 }
 
 /**
+ * Set which subtree is in the foreground.
+ * Foregrounded nodes get high z-index; others are pushed to background.
+ * Pass null to reset to default.
+ */
+export function setSubtreeForeground(values: Set<number> | null): void {
+  currentForeground = values;
+
+  for (const sprite of nodeSprites.values()) {
+    if (values === null) {
+      // Reset to default z-ordering
+      sprite.container.zIndex = 0;
+    } else if (values.has(sprite.value)) {
+      // Foreground: high z-index, lower depth = more in front
+      sprite.container.zIndex = 1000 - sprite.depth;
+    } else {
+      // Background: behind everything
+      sprite.container.zIndex = -1;
+    }
+  }
+}
+
+/**
  * Update all nodes with continuous zoom emergence.
  * Called every frame (or on zoom change) with the current canvas scale.
+ *
+ * When a foreground subtree is active, background nodes are dimmed.
  */
 export function updateNodeZoom(scale: number, theme: Theme): void {
   const showDetails = isDetailActive(scale);
@@ -158,7 +197,13 @@ export function updateNodeZoom(scale: number, theme: Theme): void {
     }
 
     sprite.container.visible = true;
-    sprite.container.alpha = nAlpha;
+
+    // Apply foreground dimming when a subtree is selected
+    if (currentForeground && !currentForeground.has(sprite.value)) {
+      sprite.container.alpha = nAlpha * 0.15; // dim background
+    } else {
+      sprite.container.alpha = nAlpha;
+    }
 
     // ── Label emergence ─────────────────────────────────────────
     const lAlpha = labelAlpha(scale, sprite.isSpine, sprite.value);
