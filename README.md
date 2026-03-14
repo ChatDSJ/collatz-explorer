@@ -1,5 +1,7 @@
 # 🌀 Collatz Explorer
 
+[![Deploy](https://github.com/ChatDSJ/collatz-explorer/actions/workflows/deploy.yml/badge.svg)](https://github.com/ChatDSJ/collatz-explorer/actions/workflows/deploy.yml)
+
 Interactive visualization of the Collatz conjecture — explore an infinite zoomable tree where every natural number finds its way to 1.
 
 ## The Collatz Conjecture
