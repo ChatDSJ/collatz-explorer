@@ -1,18 +1,19 @@
 /**
- * Reingold-Tilford tree layout algorithm.
+ * Reingold-Tilford tree layout algorithm with 30° spine shear.
  *
- * Assigns (x, y) positions to every node in the Collatz tree.
- * - y is determined by depth (deeper = higher on screen, since root is at bottom)
- * - x is computed to minimize width while avoiding overlaps
+ * Assigns (x, y) positions to every node in the Collatz binary tree.
+ * - y is determined by depth (deeper = higher on screen, root at bottom)
+ * - x is computed by Reingold-Tilford to avoid overlaps
+ * - The powers-of-2 spine is sheared to lean 30° from vertical (up-left)
  *
- * The algorithm runs in O(n) time and produces aesthetically pleasing,
- * compact layouts where:
- * - Parents are centered over their children
- * - Subtrees don't overlap
- * - The layout is deterministic
+ * Binary tree structure:
+ *   Left child  = 2x        (div2 — placed to the left)
+ *   Right child = (x-1)/3   (3n+1 inverse — placed to the right)
  *
- * Reference: Reingold & Tilford (1981), "Tidier Drawings of Trees"
- * Enhanced with the Buchheim et al. (2002) improvements for O(n) runtime.
+ * The 30° shear shifts every node's x by -depth * tan(30°), making the
+ * spine lean left while right subtrees fan out to the right.
+ *
+ * Reference: Reingold & Tilford (1981), Buchheim et al. (2002)
  */
 
 import type { CollatzNode } from '../engine/collatz';
@@ -54,6 +55,13 @@ const NODE_SPACING_X = 1.0;  // minimum horizontal spacing between nodes
 const LEVEL_HEIGHT = 1.0;     // vertical distance between levels
 
 /**
+ * Spine shear: tan(30°) ≈ 0.5774
+ * Applied per depth level to tilt the spine 30° from vertical.
+ * Positive value = spine leans left (negative x direction).
+ */
+const SPINE_LEAN = Math.tan(Math.PI / 6); // tan(30°)
+
+/**
  * Build internal RT tree structure from Collatz nodes.
  * Root is node 1 at the bottom; children grow upward.
  */
@@ -82,9 +90,7 @@ function buildRTTree(
   };
   rtNode.ancestor = rtNode; // self-reference initially
 
-  // Sort children for deterministic layout:
-  // div2 children (2n) on the left, 3np1 children on the right
-  // Within each group, sort by value
+  // Sort children: div2 (left=2x) first, then 3np1 (right=(x-1)/3)
   const sortedChildren = [...collatzNode.children].sort((a, b) => {
     const nodeA = nodes.get(a)!;
     const nodeB = nodes.get(b)!;
@@ -254,7 +260,8 @@ function executeShifts(v: RTNode): void {
 }
 
 /**
- * Second walk: top-down traversal computing final x positions.
+ * Second walk: top-down traversal computing final positions.
+ * Applies the 30° spine shear: x_final = x_RT - depth × tan(30°)
  */
 function secondWalk(
   v: RTNode,
@@ -262,8 +269,14 @@ function secondWalk(
   result: Map<number, LayoutNode>,
   bounds: { minX: number; maxX: number; minY: number; maxY: number }
 ): void {
-  const x = v.prelim + modSum;
-  const y = -v.depth * LEVEL_HEIGHT; // Negative because root is at bottom (y=0), tree grows upward
+  // Standard RT x-position
+  const xRT = v.prelim + modSum;
+
+  // Apply spine shear: shift left by depth × tan(30°)
+  const x = xRT - v.depth * SPINE_LEAN * LEVEL_HEIGHT;
+
+  // y grows upward (negative) from root at y=0
+  const y = -v.depth * LEVEL_HEIGHT;
 
   result.set(v.value, {
     value: v.value,
@@ -284,7 +297,10 @@ function secondWalk(
 }
 
 /**
- * Layout the inverse Collatz tree using Reingold-Tilford algorithm.
+ * Layout the inverse Collatz binary tree.
+ *
+ * Uses Reingold-Tilford for overlap-free positioning, then applies
+ * a 30° shear so the powers-of-2 spine leans up-left.
  *
  * @param nodes - The Collatz tree nodes from buildInverseTree()
  * @param scaleFactor - Multiplier for spacing (default 80px between nodes)
@@ -301,7 +317,7 @@ export function layoutTree(
   // First walk: compute preliminary positions
   firstWalk(rtRoot);
 
-  // Second walk: compute final positions
+  // Second walk: compute final positions with spine shear
   const layoutNodes = new Map<number, LayoutNode>();
   const bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
   secondWalk(rtRoot, 0, layoutNodes, bounds);
