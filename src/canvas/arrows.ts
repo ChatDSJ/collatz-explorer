@@ -19,6 +19,17 @@ const ARROW_HEAD_SIZE = 8;
 const ARROW_WIDTH = 1.5;
 const NODE_RADIUS = 16; // avoid overlapping the node circle
 
+/** Tracked arrow for dynamic visibility updates */
+interface TrackedArrow {
+  graphics: Graphics;
+  fromValue: number;
+  toValue: number;
+  type: 'div2' | '3np1';
+}
+
+/** Module-level array of all tracked arrows (populated by renderArrows) */
+let trackedArrows: TrackedArrow[] = [];
+
 export interface ArrowRenderResult {
   container: Container;
   arrowData: ArrowData[];
@@ -35,6 +46,7 @@ export function renderArrows(
 ): ArrowRenderResult {
   const container = new Container();
   const arrowData: ArrowData[] = [];
+  trackedArrows = []; // Reset tracking
 
   for (const edge of edges) {
     const fromNode = layoutNodes.get(edge.from);
@@ -54,6 +66,14 @@ export function renderArrows(
     );
 
     container.addChild(arrow);
+
+    // Track arrow for dynamic visibility updates
+    trackedArrows.push({
+      graphics: arrow,
+      fromValue: edge.from,
+      toValue: edge.to,
+      type: edge.type,
+    });
 
     // Store metadata for animation system
     arrowData.push({
@@ -82,6 +102,23 @@ export function renderArrows(
   }
 
   return { container, arrowData };
+}
+
+/**
+ * Update arrow visibility based on which nodes are currently "displayed".
+ * An arrow is visible only when BOTH its endpoints are in the displayed set.
+ *
+ * Returns a Set of hidden arrow indices (for syncing with animation system).
+ */
+export function updateArrowVisibility(displayedNodes: Set<number>): Set<number> {
+  const hiddenIndices = new Set<number>();
+  for (let i = 0; i < trackedArrows.length; i++) {
+    const ta = trackedArrows[i]!;
+    const visible = displayedNodes.has(ta.fromValue) && displayedNodes.has(ta.toValue);
+    ta.graphics.visible = visible;
+    if (!visible) hiddenIndices.add(i);
+  }
+  return hiddenIndices;
 }
 
 /**

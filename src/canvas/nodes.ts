@@ -10,6 +10,15 @@
  *
  * Detail layers emerge smoothly as zoom increases:
  * - Nodes → Labels → Edge-op context → Even/odd rings → Step badges
+ *
+ * Overlap / occlusion tracking:
+ * - In the geometric layout, subtrees can overlap by design (compact layout).
+ * - Nodes rendered later in BFS order appear visually "on top" of earlier ones.
+ * - A node is "occluded" if another node overlaps it and renders on top.
+ * - Occluded nodes are excluded from the "displayed" set, so their arrows
+ *   are hidden (fixing the spurious red arrow bug).
+ * - Clicking a parent with a 3n+1 child foregrounds that child's subtree,
+ *   overriding occlusion and bringing it to the visual front.
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
@@ -29,6 +38,9 @@ import {
 
 const NODE_RADIUS = 16;
 const SPINE_RADIUS = 20;
+
+/** Distance threshold for overlap detection (center-to-center) */
+const OVERLAP_THRESHOLD = NODE_RADIUS * 2;
 
 interface NodeSprite {
   container: Container;
@@ -52,6 +64,89 @@ const nodeSprites: Map<number, NodeSprite> = new Map();
  * other nodes are dimmed and pushed to background.
  */
 let currentForeground: Set<number> | null = null;
+
+/**
+ * The highlighted subtree — the 3n+1 child's subtree that gets
+ * the highest z-priority (on top of other foreground nodes).
+ * This is the subtree that was "brought to front" by clicking its parent.
+ */
+let currentHighlight: Set<number> | null = null;
+
+/**
+ * Precomputed set of nodes that are occluded by overlapping nodes
+ * in the default z-ordering (BFS render order).
+ * An occluded node is behind another node and not visible to the user.
+ */
+let occludedNodes = new Set<number>();
+
+/**
+ * Precompute which nodes are occluded by overlapping neighbors.
+ *
+ * In the geometric layout, nodes can overlap by design. When two nodes
+ * are within OVERLAP_THRESHOLD pixels, the one rendered later (higher BFS
+ * index) visually covers the earlier one. The earlier node is "occluded"
+ * and its arrows should be hidden.
+ *
+ * Must be called AFTER renderNodes() populates the layout.
+ */
+export function initOverlapDetection(layoutNodes: Map<number, LayoutNode>): void {
+  occludedNodes = new Set();
+
+  const thresholdSq = OVERLAP_THRESHOLD * OVERLAP_THRESHOLD;
+  const entries = Array.from(layoutNodes.entries());
+
+  // entries are in Map insertion order (BFS order from root).
+  // In PixiJS with sortableChildren and equal zIndex, later children
+  // render on top. So entries[j] (j > i) renders on top of entries[i].
+  for (let i = 0; i < entries.length; i++) {
+    const [v1, l1] = entries[i]!;
+    for (let j = i + 1; j < entries.length; j++) {
+      const [, l2] = entries[j]!;
+      const dx = l1.x - l2.x;
+      const dy = l1.y - l2.y;
+      if (dx * dx + dy * dy < thresholdSq) {
+        // v1 (earlier in BFS) is occluded by entries[j] (later, on top)
+        occludedNodes.add(v1);
+        break; // v1 is already marked as occluded
+      }
+    }
+  }
+}
+
+/**
+ * Get the set of nodes currently "displayed" — visible to the user
+ * and not hidden behind overlapping nodes.
+ *
+ * A node is displayed if:
+ * 1. Its PixiJS container is visible (not hidden by zoom emergence)
+ * 2. It is NOT occluded, UNLESS it is in the highlighted subtree
+ */
+export function getDisplayedNodes(): Set<number> {
+  const displayed = new Set<number>();
+
+  for (const [value, sprite] of nodeSprites) {
+    if (!sprite.container.visible) continue;
+
+    // Highlighted subtree always counts as displayed (overrides occlusion)
+    if (currentHighlight?.has(value)) {
+      displayed.add(value);
+      continue;
+    }
+
+    // Foregrounded nodes are displayed (their z-index is boosted)
+    if (currentForeground?.has(value)) {
+      displayed.add(value);
+      continue;
+    }
+
+    // In default state (no selection), check occlusion
+    if (occludedNodes.has(value)) continue;
+
+    displayed.add(value);
+  }
+
+  return displayed;
+}
 
 /**
  * Render all nodes in the tree.
@@ -105,14 +200,18 @@ export function renderNodes(
     nodeContainer.on('pointerover', () => {
       circle.clear();
       drawNodeCircle(circle, radius * 1.15, isSpine, theme, true);
-      nodeContainer.zIndex = 2000; // hover always on top
+      nodeContainer.zIndex = 3000; // hover always on top
     });
     nodeContainer.on('pointerout', () => {
       circle.clear();
       drawNodeCircle(circle, radius, isSpine, theme, false);
       // Restore z-index based on foreground state
-      if (currentForeground) {
-        nodeContainer.zIndex = currentForeground.has(value) ? 1000 - layoutNode.depth : -1;
+      if (currentHighlight?.has(value)) {
+        nodeContainer.zIndex = 2000 - layoutNode.depth;
+      } else if (currentForeground?.has(value)) {
+        nodeContainer.zIndex = 1000 - layoutNode.depth;
+      } else if (currentForeground) {
+        nodeContainer.zIndex = -1;
       } else {
         nodeContainer.zIndex = 0;
       }
@@ -158,14 +257,26 @@ function drawNodeCircle(
  * Set which subtree is in the foreground.
  * Foregrounded nodes get high z-index; others are pushed to background.
  * Pass null to reset to default.
+ *
+ * @param values - All foreground node values, or null to reset
+ * @param highlightSubtree - Optional 3n+1 child's subtree that gets
+ *   even higher z-priority (renders on top of other foreground nodes).
+ *   This is used when clicking a node to reveal its red child.
  */
-export function setSubtreeForeground(values: Set<number> | null): void {
+export function setSubtreeForeground(
+  values: Set<number> | null,
+  highlightSubtree?: Set<number> | null,
+): void {
   currentForeground = values;
+  currentHighlight = highlightSubtree ?? null;
 
   for (const sprite of nodeSprites.values()) {
     if (values === null) {
       // Reset to default z-ordering
       sprite.container.zIndex = 0;
+    } else if (currentHighlight?.has(sprite.value)) {
+      // Highlighted subtree: highest z-priority (above other foreground)
+      sprite.container.zIndex = 2000 - sprite.depth;
     } else if (values.has(sprite.value)) {
       // Foreground: high z-index, lower depth = more in front
       sprite.container.zIndex = 1000 - sprite.depth;

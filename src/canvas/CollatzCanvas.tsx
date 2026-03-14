@@ -4,10 +4,11 @@
  * - Continuous zoom emergence (details smoothly appear/disappear)
  * - Arrow pulse animations
  * - Path tracing (click to highlight journey to 1)
- * - Click-to-foreground (selected subtree pops forward)
+ * - Click-to-foreground (3n+1 child subtree pops forward on click)
  * - Smooth camera transitions
  * - Edge operation labels (÷2, 3n+1)
  * - Even/odd detail rings and step badges at close zoom
+ * - Arrow visibility tied to node display state (no spurious arrows)
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -18,8 +19,14 @@ import { buildInverseTree, getEdges, getDescendants } from '../engine/collatz';
 import type { CollatzNode } from '../engine/collatz';
 import { layoutTree } from '../layout/reingold-tilford';
 import type { LayoutNode } from '../layout/reingold-tilford';
-import { renderNodes, updateNodeZoom, setSubtreeForeground } from './nodes';
-import { renderArrows } from './arrows';
+import {
+  renderNodes,
+  updateNodeZoom,
+  setSubtreeForeground,
+  initOverlapDetection,
+  getDisplayedNodes,
+} from './nodes';
+import { renderArrows, updateArrowVisibility } from './arrows';
 import { ArrowAnimationSystem } from './animation';
 import type { AnimationStyle } from './animation';
 import { createPathTrace } from './pathTrace';
@@ -46,6 +53,38 @@ export interface CanvasState {
   treeNodes: Map<number, CollatzNode>;
   layoutNodes: Map<number, LayoutNode>;
   zoomLevel: ZoomLevel;
+}
+
+/**
+ * Sync arrow visibility (and animation particles) with the current
+ * set of displayed nodes. Called after zoom changes and selection changes.
+ */
+function syncArrowVisibility(animSystem: ArrowAnimationSystem | null): void {
+  const displayed = getDisplayedNodes();
+  const hidden = updateArrowVisibility(displayed);
+  if (animSystem) {
+    animSystem.setHiddenArrows(hidden);
+  }
+}
+
+/**
+ * Find the 3n+1 child of a node (if it exists in the tree).
+ * Returns the child value, or null if none.
+ */
+function find3np1Child(
+  value: number,
+  treeNodes: Map<number, CollatzNode>,
+): number | null {
+  const node = treeNodes.get(value);
+  if (!node) return null;
+
+  for (const childValue of node.children) {
+    const child = treeNodes.get(childValue);
+    if (child && child.edgeType === '3np1') {
+      return childValue;
+    }
+  }
+  return null;
 }
 
 export default function CollatzCanvas({
@@ -132,6 +171,9 @@ export default function CollatzCanvas({
       );
       world.addChild(nodeContainer);
 
+      // Initialize overlap detection (must be after renderNodes)
+      initOverlapDetection(layout.nodes);
+
       // Initialize state
       stateRef.current = {
         viewport: { x: 0, y: 0, scale: 1 },
@@ -151,6 +193,9 @@ export default function CollatzCanvas({
       updateNodeZoom(1.0, theme);
       edgeLabels.update(1.0);
 
+      // Initial arrow visibility sync (hide arrows for occluded nodes)
+      syncArrowVisibility(animSystem);
+
       // Set up camera system
       const camera = new CameraSystem(
         world,
@@ -164,6 +209,9 @@ export default function CollatzCanvas({
           // Continuous zoom emergence — smooth transitions
           updateNodeZoom(newScale, theme);
           edgeLabels.update(newScale);
+
+          // Sync arrow visibility after zoom changes node visibility
+          syncArrowVisibility(animSystemRef.current);
         },
       );
       cameraRef.current = camera;
@@ -197,6 +245,7 @@ export default function CollatzCanvas({
           getAnimationStyle: () => animSystem.style,
           getPathTrace: () => pathTraceRef.current?.sequence ?? null,
           getEdgeLabelCount: () => edgeLabels.container.children.length,
+          getDisplayedNodes: () => getDisplayedNodes(),
           getVisibleNodes: () => {
             const state = stateRef.current;
             if (!state || !appRef.current) return 0;
@@ -288,6 +337,9 @@ export default function CollatzCanvas({
       // Re-run zoom emergence to restore normal alphas
       const scale = state.viewport.scale;
       updateNodeZoom(scale, theme);
+
+      // Sync arrow visibility (back to default occlusion rules)
+      syncArrowVisibility(animSystemRef.current);
       return;
     }
 
@@ -300,9 +352,16 @@ export default function CollatzCanvas({
       pathTraceRef.current = trace;
     }
 
-    // Bring clicked node's subtree to foreground
+    // Find 3n+1 child's subtree for z-boosting (Bug 2 fix)
+    const redChild = find3np1Child(selected, state.treeNodes);
+    let highlightSubtree: Set<number> | null = null;
+    if (redChild !== null) {
+      highlightSubtree = getDescendants(redChild, state.treeNodes);
+    }
+
+    // Bring clicked node's subtree to foreground, with red child's subtree highlighted
     const descendants = getDescendants(selected, state.treeNodes);
-    setSubtreeForeground(descendants);
+    setSubtreeForeground(descendants, highlightSubtree);
 
     // Dim arrows and labels that aren't part of the selection
     if (arrowContainerRef.current) arrowContainerRef.current.alpha = 0.15;
@@ -312,6 +371,9 @@ export default function CollatzCanvas({
     // Re-run zoom emergence to apply foreground dimming
     const scale = state.viewport.scale;
     updateNodeZoom(scale, theme);
+
+    // Sync arrow visibility with updated foreground state
+    syncArrowVisibility(animSystemRef.current);
 
     // Fly camera to the selected node
     const layoutNode = state.layoutNodes.get(selected);

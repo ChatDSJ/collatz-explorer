@@ -40,6 +40,7 @@ export class ArrowAnimationSystem {
   private elapsed = 0;
   private _style: AnimationStyle = 'flow';
   private theme: Theme;
+  private hiddenArrows = new Set<number>();
 
   constructor(theme: Theme) {
     this.container = new Container();
@@ -69,6 +70,11 @@ export class ArrowAnimationSystem {
   setTheme(theme: Theme): void {
     this.theme = theme;
     this.rebuild();
+  }
+
+  /** Update which arrows are hidden (indices into the arrows array). */
+  setHiddenArrows(indices: Set<number>): void {
+    this.hiddenArrows = indices;
   }
 
   /** Called every frame by PixiJS ticker. dt is in seconds. */
@@ -133,6 +139,16 @@ export class ArrowAnimationSystem {
 
     for (let i = 0; i < this.arrows.length; i++) {
       const arrow = this.arrows[i]!;
+
+      // Skip hidden arrows — hide their particles
+      if (this.hiddenArrows.has(i)) {
+        for (let j = 0; j < 2; j++) {
+          const dot = this.particles[pIdx];
+          if (dot) dot.alpha = 0;
+          pIdx++;
+        }
+        continue;
+      }
       const dx = arrow.toX - arrow.fromX;
       const dy = arrow.toY - arrow.fromY;
       const len = Math.sqrt(dx * dx + dy * dy);
@@ -191,6 +207,9 @@ export class ArrowAnimationSystem {
       const g = this.pulseGraphics[i];
       if (!g) continue;
 
+      // Skip hidden arrows
+      if (this.hiddenArrows.has(i)) { g.clear(); continue; }
+
       const color = arrow.type === 'div2'
         ? this.theme.div2ArrowColor
         : this.theme.threenplusoneArrowColor;
@@ -238,6 +257,9 @@ export class ArrowAnimationSystem {
       const arrow = this.arrows[i]!;
       const g = this.pulseGraphics[i];
       if (!g) continue;
+
+      // Skip hidden arrows
+      if (this.hiddenArrows.has(i)) { g.clear(); continue; }
 
       const color = arrow.type === 'div2'
         ? this.theme.div2ArrowColor
