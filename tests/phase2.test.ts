@@ -1,12 +1,25 @@
 /**
  * Phase 2: Life & Motion tests.
  *
- * Tests for animation system, path tracing, camera, and spine shear layout.
+ * Tests for animation system, path tracing, camera, geometric layout,
+ * zoom emergence, and edge labels.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { collatzSequence, buildInverseTree, isPowerOf2, getPathEdgeKeys } from '../src/engine/collatz';
+import { describe, it, expect } from 'vitest';
+import {
+  collatzSequence,
+  buildInverseTree,
+  isPowerOf2,
+  getPathEdgeKeys,
+} from '../src/engine/collatz';
 import { layoutTree } from '../src/layout/reingold-tilford';
+import {
+  smoothstep,
+  nodeAlpha,
+  labelAlpha,
+  edgeLabelAlpha,
+  detailRingAlpha,
+} from '../src/canvas/zoomEmergence';
 
 // ── Path tracing logic ────────────────────────────────────────────────
 
@@ -22,8 +35,6 @@ describe('path tracing', () => {
   it('path edge keys are symmetric', () => {
     const seq = [7, 22, 11, 34, 17, 52, 26, 13, 40, 20, 10, 5, 16, 8, 4, 2, 1];
     const keys = getPathEdgeKeys(seq);
-
-    // Each edge should have both forward and reverse keys
     expect(keys.has('7→22')).toBe(true);
     expect(keys.has('22→7')).toBe(true);
     expect(keys.has('2→1')).toBe(true);
@@ -33,29 +44,27 @@ describe('path tracing', () => {
   it('path edge count matches sequence edges', () => {
     const seq = collatzSequence(6);
     const keys = getPathEdgeKeys(seq);
-    // Each edge creates 2 keys (forward + reverse)
     expect(keys.size).toBe((seq.length - 1) * 2);
   });
 
   it('path for spine numbers is all spine', () => {
-    // 16 → 8 → 4 → 2 → 1 (all powers of 2)
     const seq = collatzSequence(16);
     expect(seq.every(v => isPowerOf2(v))).toBe(true);
   });
 
   it('path for 27 has 111 steps (famously long)', () => {
     const seq = collatzSequence(27);
-    expect(seq.length).toBe(112); // 111 steps + the number itself
+    expect(seq.length).toBe(112);
   });
 });
 
-// ── Layout: spine shear at 30° ────────────────────────────────────────
+// ── Geometric layout ──────────────────────────────────────────────────
 
-describe('layout spine shear', () => {
+describe('geometric layout', () => {
   const tree = buildInverseTree(5000, 40);
   const layout = layoutTree(tree, 80);
 
-  it('spine nodes grow upward (decreasing y)', () => {
+  it('spine grows upward (y decreases with depth)', () => {
     const spineValues = [1, 2, 4, 8, 16, 32, 64, 128];
     for (let i = 0; i < spineValues.length - 1; i++) {
       const nodeA = layout.nodes.get(spineValues[i]!);
@@ -67,46 +76,61 @@ describe('layout spine shear', () => {
   });
 
   it('spine leans left (x decreases with depth)', () => {
-    // With the 30° shear, deeper spine nodes should have smaller x
     const node1 = layout.nodes.get(1)!;
     const node16 = layout.nodes.get(16)!;
     const node64 = layout.nodes.get(64)!;
-
     expect(node16.x).toBeLessThan(node1.x);
     expect(node64.x).toBeLessThan(node16.x);
   });
 
-  it('spine angle is approximately 30° from vertical', () => {
-    // Measure angle between consecutive spine nodes
+  it('spine angle is exactly 30° from vertical', () => {
     const node1 = layout.nodes.get(1)!;
     const node2 = layout.nodes.get(2)!;
-
     const dx = Math.abs(node2.x - node1.x);
     const dy = Math.abs(node2.y - node1.y);
     const angleDeg = Math.atan2(dx, dy) * (180 / Math.PI);
+    expect(angleDeg).toBeCloseTo(30, 1);
+  });
 
-    // Should be close to 30° (allow some tolerance for RT adjustments)
-    expect(angleDeg).toBeGreaterThan(25);
-    expect(angleDeg).toBeLessThan(35);
+  it('NO arrow is ever horizontal (all children have y < parent)', () => {
+    for (const [value, node] of tree) {
+      const parentLayout = layout.nodes.get(value);
+      if (!parentLayout) continue;
+
+      for (const childValue of node.children) {
+        const childLayout = layout.nodes.get(childValue);
+        if (!childLayout) continue;
+
+        // Every child must be strictly above its parent (lower y)
+        expect(childLayout.y).toBeLessThan(parentLayout.y);
+      }
+    }
   });
 
   it('right children are to the right of their parent', () => {
-    // Node 5 is right child of 16, should be to the right
+    // Node 5 is right child of 16
     const node16 = layout.nodes.get(16)!;
     const node5 = layout.nodes.get(5);
-
     if (node5) {
       expect(node5.x).toBeGreaterThan(node16.x);
     }
   });
 
-  it('left children (2x) are to the left of right siblings ((x-1)/3)', () => {
-    // At node 16: left=32, right=5
+  it('left children (spine) are to the left of their parent', () => {
+    const node16 = layout.nodes.get(16)!;
     const node32 = layout.nodes.get(32)!;
-    const node5 = layout.nodes.get(5);
+    expect(node32.x).toBeLessThan(node16.x);
+  });
 
+  it('right branch angle is approximately 60° from vertical', () => {
+    // 16 → 5 is a right branch
+    const node16 = layout.nodes.get(16)!;
+    const node5 = layout.nodes.get(5);
     if (node5) {
-      expect(node32.x).toBeLessThan(node5.x);
+      const dx = Math.abs(node5.x - node16.x);
+      const dy = Math.abs(node5.y - node16.y);
+      const angleDeg = Math.atan2(dx, dy) * (180 / Math.PI);
+      expect(angleDeg).toBeCloseTo(60, 1);
     }
   });
 
@@ -123,19 +147,16 @@ describe('layout spine shear', () => {
   });
 });
 
-// ── Layout compatibility with path tracing ────────────────────────────
+// ── Layout has path nodes ─────────────────────────────────────────────
 
 describe('layout has path nodes', () => {
   const tree = buildInverseTree(5000, 40);
   const layout = layoutTree(tree, 80);
 
-  it('all sequence nodes for small numbers are in tree', () => {
-    for (const testVal of [3, 5, 7, 10, 20, 42]) {
-      const seq = collatzSequence(testVal);
-      expect(layout.nodes.has(1)).toBe(true);
-      expect(layout.nodes.has(2)).toBe(true);
-      expect(layout.nodes.has(4)).toBe(true);
-    }
+  it('fundamental nodes are in the layout', () => {
+    expect(layout.nodes.has(1)).toBe(true);
+    expect(layout.nodes.has(2)).toBe(true);
+    expect(layout.nodes.has(4)).toBe(true);
   });
 
   it('layout preserves spine ordering', () => {
@@ -147,6 +168,67 @@ describe('layout has path nodes', () => {
         expect(nodeB.y).toBeLessThan(nodeA.y);
       }
     }
+  });
+});
+
+// ── Zoom emergence (smooth transitions) ───────────────────────────────
+
+describe('zoom emergence', () => {
+  it('smoothstep returns 0 below edge0', () => {
+    expect(smoothstep(0.5, 1.0, 0.2)).toBe(0);
+    expect(smoothstep(0.5, 1.0, 0.5)).toBe(0);
+  });
+
+  it('smoothstep returns 1 above edge1', () => {
+    expect(smoothstep(0.5, 1.0, 1.0)).toBe(1);
+    expect(smoothstep(0.5, 1.0, 2.0)).toBe(1);
+  });
+
+  it('smoothstep is monotonically increasing', () => {
+    let prev = 0;
+    for (let x = 0; x <= 2; x += 0.05) {
+      const val = smoothstep(0.5, 1.5, x);
+      expect(val).toBeGreaterThanOrEqual(prev);
+      prev = val;
+    }
+  });
+
+  it('smoothstep midpoint is 0.5', () => {
+    expect(smoothstep(0.0, 1.0, 0.5)).toBeCloseTo(0.5, 5);
+  });
+
+  it('spine nodes are always fully visible', () => {
+    expect(nodeAlpha(0.01, true)).toBe(1);
+    expect(nodeAlpha(0.5, true)).toBe(1);
+    expect(nodeAlpha(5.0, true)).toBe(1);
+  });
+
+  it('non-spine nodes fade in between 0.10 and 0.22', () => {
+    expect(nodeAlpha(0.05, false)).toBe(0);
+    expect(nodeAlpha(0.16, false)).toBeGreaterThan(0);
+    expect(nodeAlpha(0.16, false)).toBeLessThan(1);
+    expect(nodeAlpha(0.30, false)).toBe(1);
+  });
+
+  it('spine labels appear before non-spine labels', () => {
+    const scale = 0.25;
+    const spineAlpha = labelAlpha(scale, true, 4);
+    const nonSpineAlpha = labelAlpha(scale, false, 100);
+    expect(spineAlpha).toBeGreaterThan(nonSpineAlpha);
+  });
+
+  it('edge labels emerge at close zoom', () => {
+    expect(edgeLabelAlpha(0.5)).toBe(0);
+    expect(edgeLabelAlpha(1.1)).toBeGreaterThan(0);
+    expect(edgeLabelAlpha(1.1)).toBeLessThan(1);
+    expect(edgeLabelAlpha(2.0)).toBe(1);
+  });
+
+  it('detail rings emerge at detail zoom', () => {
+    expect(detailRingAlpha(1.0)).toBe(0);
+    expect(detailRingAlpha(1.8)).toBeGreaterThan(0);
+    expect(detailRingAlpha(1.8)).toBeLessThan(1);
+    expect(detailRingAlpha(3.0)).toBe(1);
   });
 });
 

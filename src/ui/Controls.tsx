@@ -230,7 +230,7 @@ function NodeInfo({ value, onClose }: { value: number; onClose: () => void }) {
         )}
       </div>
 
-      {/* Path trace display */}
+      {/* Path trace display — full sequence, scrollable */}
       <div
         style={{
           marginTop: '10px',
@@ -242,6 +242,8 @@ function NodeInfo({ value, onClose }: { value: number; onClose: () => void }) {
           lineHeight: 1.8,
           wordBreak: 'break-all',
           color: 'rgba(255,255,255,0.6)',
+          maxHeight: '180px',
+          overflowY: 'auto',
         }}
       >
         <div style={{ color: 'rgba(255,215,0,0.6)', marginBottom: '2px', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px' }}>
@@ -255,13 +257,8 @@ function NodeInfo({ value, onClose }: { value: number; onClose: () => void }) {
 
 /**
  * Format a Collatz sequence for display.
- * Shows first 6, ellipsis, last 4 if the sequence is long.
+ * Always shows the full path — every step visible.
  */
 function formatPath(seq: number[]): string {
-  if (seq.length <= 12) {
-    return seq.join(' → ');
-  }
-  const head = seq.slice(0, 6).join(' → ');
-  const tail = seq.slice(-4).join(' → ');
-  return `${head} → … (${seq.length - 10} more) … → ${tail}`;
+  return seq.join(' → ');
 }

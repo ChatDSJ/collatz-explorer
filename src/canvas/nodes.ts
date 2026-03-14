@@ -5,14 +5,26 @@
  * Visual properties change based on:
  * - Whether it's on the spine (power of 2)
  * - Whether it's selected
- * - Current zoom level (LOD)
+ * - Current zoom level (continuous alpha-based emergence)
+ *
+ * Detail layers emerge smoothly as zoom increases:
+ * - Nodes → Labels → Edge-op context → Even/odd rings → Step badges
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
 import type { CollatzNode } from '../engine/collatz';
-import { isPowerOf2 } from '../engine/collatz';
+import { isPowerOf2, stoppingTime } from '../engine/collatz';
 import type { LayoutNode } from '../layout/reingold-tilford';
-import type { Theme, ZoomLevel } from '../types';
+import type { Theme } from '../types';
+import {
+  nodeAlpha,
+  labelAlpha,
+  nodeScaleFactor,
+  detailRingAlpha,
+  stepBadgeAlpha,
+  isDetailActive,
+  isStepBadgeActive,
+} from './zoomEmergence';
 
 const NODE_RADIUS = 16;
 const SPINE_RADIUS = 20;
@@ -23,6 +35,11 @@ interface NodeSprite {
   label: Text;
   value: number;
   isSpine: boolean;
+  isEven: boolean;
+  /** Detail ring (even/odd indicator) — created lazily */
+  detailRing: Graphics | null;
+  /** Step badge — created lazily */
+  stepBadge: Text | null;
 }
 
 const nodeSprites: Map<number, NodeSprite> = new Map();
@@ -66,6 +83,7 @@ export function renderNodes(
       },
     });
     label.anchor.set(0.5, 0.5);
+    label.alpha = 0; // start hidden, emergence system controls visibility
     nodeContainer.addChild(label);
 
     // Click handler
@@ -94,6 +112,9 @@ export function renderNodes(
       label,
       value,
       isSpine,
+      isEven: value % 2 === 0,
+      detailRing: null,
+      stepBadge: null,
     });
   }
 
@@ -119,37 +140,127 @@ function drawNodeCircle(
 }
 
 /**
- * Update node visibility and detail based on zoom level.
+ * Update all nodes with continuous zoom emergence.
+ * Called every frame (or on zoom change) with the current canvas scale.
  */
-export function updateNodeLOD(
-  container: Container,
-  zoomLevel: ZoomLevel,
-  _theme: Theme,
-): void {
+export function updateNodeZoom(scale: number, theme: Theme): void {
+  const showDetails = isDetailActive(scale);
+  const showBadges = isStepBadgeActive(scale);
+
   for (const sprite of nodeSprites.values()) {
-    switch (zoomLevel) {
-      case 'far':
-        // Only show spine nodes, hide labels
-        sprite.container.visible = sprite.isSpine;
-        sprite.label.visible = false;
-        break;
-      case 'medium':
-        // Show all nodes, labels only for spine
-        sprite.container.visible = true;
-        sprite.label.visible = sprite.isSpine || sprite.value <= 20;
-        break;
-      case 'close':
-        // Show all nodes and labels
-        sprite.container.visible = true;
-        sprite.label.visible = true;
-        break;
-      case 'detail':
-        // Show everything with full detail
-        sprite.container.visible = true;
-        sprite.label.visible = true;
-        break;
+    // ── Node visibility (alpha-based, no hard cutoff) ───────────
+    const nAlpha = nodeAlpha(scale, sprite.isSpine);
+
+    if (nAlpha < 0.01) {
+      // Fully transparent — hide to save draw calls
+      sprite.container.visible = false;
+      continue;
+    }
+
+    sprite.container.visible = true;
+    sprite.container.alpha = nAlpha;
+
+    // ── Label emergence ─────────────────────────────────────────
+    const lAlpha = labelAlpha(scale, sprite.isSpine, sprite.value);
+    sprite.label.visible = lAlpha > 0.01;
+    sprite.label.alpha = lAlpha;
+
+    // ── Subtle scale growth at close zoom ───────────────────────
+    const sf = nodeScaleFactor(scale, sprite.isSpine);
+    sprite.container.scale.set(sf);
+
+    // ── Detail ring (even/odd indicator) — lazy creation ────────
+    if (showDetails) {
+      const ringAlpha = detailRingAlpha(scale);
+      if (ringAlpha > 0.01) {
+        if (!sprite.detailRing) {
+          sprite.detailRing = createDetailRing(sprite, theme);
+          sprite.container.addChildAt(sprite.detailRing, 0); // behind circle
+        }
+        sprite.detailRing.visible = true;
+        sprite.detailRing.alpha = ringAlpha;
+      } else if (sprite.detailRing) {
+        sprite.detailRing.visible = false;
+      }
+    } else if (sprite.detailRing) {
+      sprite.detailRing.visible = false;
+    }
+
+    // ── Step badge — lazy creation ──────────────────────────────
+    if (showBadges && sprite.value > 1) {
+      const badgeAlpha = stepBadgeAlpha(scale);
+      if (badgeAlpha > 0.01) {
+        if (!sprite.stepBadge) {
+          sprite.stepBadge = createStepBadge(sprite);
+          sprite.container.addChild(sprite.stepBadge);
+        }
+        sprite.stepBadge.visible = true;
+        sprite.stepBadge.alpha = badgeAlpha;
+      } else if (sprite.stepBadge) {
+        sprite.stepBadge.visible = false;
+      }
+    } else if (sprite.stepBadge) {
+      sprite.stepBadge.visible = false;
     }
   }
+}
+
+/**
+ * Create the even/odd detail ring for a node.
+ * Teal ring for even, coral for odd.
+ */
+function createDetailRing(sprite: NodeSprite, theme: Theme): Graphics {
+  const ring = new Graphics();
+  const radius = (sprite.isSpine ? SPINE_RADIUS : NODE_RADIUS) + 5;
+  const color = sprite.isEven ? theme.div2ArrowColor : theme.threenplusoneArrowColor;
+
+  // Outer glow ring
+  ring.circle(0, 0, radius);
+  ring.stroke({ color, width: 1.5, alpha: 0.5 });
+
+  // Subtle fill
+  ring.circle(0, 0, radius);
+  ring.fill({ color, alpha: 0.04 });
+
+  return ring;
+}
+
+/**
+ * Create a step count badge below the node.
+ * Shows "→1 in N" (stopping time).
+ */
+function createStepBadge(sprite: NodeSprite): Text {
+  const steps = stoppingTime(sprite.value);
+  const badge = new Text({
+    text: `${steps}→1`,
+    style: {
+      fontFamily: 'monospace',
+      fontSize: 8,
+      fill: 0x888888,
+    },
+  });
+  badge.anchor.set(0.5, 0);
+  const radius = sprite.isSpine ? SPINE_RADIUS : NODE_RADIUS;
+  badge.y = radius + 4;
+  return badge;
+}
+
+/**
+ * Legacy LOD function — kept for backward compat but now delegates
+ * to updateNodeZoom with an approximate scale.
+ */
+export function updateNodeLOD(
+  _container: Container,
+  zoomLevel: string,
+  theme: Theme,
+): void {
+  const scaleMap: Record<string, number> = {
+    far: 0.08,
+    medium: 0.35,
+    close: 1.0,
+    detail: 2.0,
+  };
+  updateNodeZoom(scaleMap[zoomLevel] ?? 0.35, theme);
 }
 
 /**
