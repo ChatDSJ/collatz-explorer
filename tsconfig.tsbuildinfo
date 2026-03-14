@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/canvas/CollatzCanvas.tsx","./src/canvas/arrows.ts","./src/canvas/nodes.ts","./src/engine/collatz.ts","./src/layout/reingold-tilford.ts","./src/ui/Controls.tsx","./src/ui/JumpToNumber.tsx","./tests/collatz.test.ts"],"version":"5.7.3"}
