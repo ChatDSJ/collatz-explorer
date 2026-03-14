@@ -13,20 +13,28 @@ import { Container, Graphics } from 'pixi.js';
 import type { CollatzEdge } from '../engine/collatz';
 import type { LayoutNode } from '../layout/reingold-tilford';
 import type { Theme } from '../types';
+import type { ArrowData } from './animation';
 
 const ARROW_HEAD_SIZE = 8;
 const ARROW_WIDTH = 1.5;
 const NODE_RADIUS = 16; // avoid overlapping the node circle
 
+export interface ArrowRenderResult {
+  container: Container;
+  arrowData: ArrowData[];
+}
+
 /**
  * Render all arrows in the tree.
+ * Returns both the visual container and arrow metadata for animation.
  */
 export function renderArrows(
   edges: CollatzEdge[],
   layoutNodes: Map<number, LayoutNode>,
   theme: Theme,
-): Container {
+): ArrowRenderResult {
   const container = new Container();
+  const arrowData: ArrowData[] = [];
 
   for (const edge of edges) {
     const fromNode = layoutNodes.get(edge.from);
@@ -46,6 +54,17 @@ export function renderArrows(
     );
 
     container.addChild(arrow);
+
+    // Store metadata for animation system
+    arrowData.push({
+      fromX: fromNode.x,
+      fromY: fromNode.y,
+      toX: toNode.x,
+      toY: toNode.y,
+      type: edge.type,
+      fromValue: edge.from,
+      toValue: edge.to,
+    });
   }
 
   // Add the special 1→4 loop arrow
@@ -62,7 +81,7 @@ export function renderArrows(
     container.addChild(loopArrow);
   }
 
-  return container;
+  return { container, arrowData };
 }
 
 /**

@@ -5,14 +5,16 @@
 import { useState, useCallback } from 'react';
 import CollatzCanvas from './canvas/CollatzCanvas';
 import Controls from './ui/Controls';
+import type { AnimationStyle } from './canvas/animation';
 
 export default function App() {
   const [theme, setTheme] = useState('midnight');
   const [jumpToNumber, setJumpToNumber] = useState<number | null>(null);
   const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
+  const [animationStyle, setAnimationStyle] = useState<AnimationStyle>('flow');
 
   const handleNodeClick = useCallback((value: number) => {
-    setSelectedNumber(value);
+    setSelectedNumber((prev) => prev === value ? null : value);
   }, []);
 
   const handleJump = useCallback((n: number) => {
@@ -22,6 +24,10 @@ export default function App() {
     setTimeout(() => setJumpToNumber(null), 100);
   }, []);
 
+  const handleClearSelection = useCallback(() => {
+    setSelectedNumber(null);
+  }, []);
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <CollatzCanvas
@@ -29,12 +35,16 @@ export default function App() {
         onNodeClick={handleNodeClick}
         jumpToNumber={jumpToNumber}
         selectedNumber={selectedNumber}
+        animationStyle={animationStyle}
       />
       <Controls
         selectedNumber={selectedNumber}
         onJump={handleJump}
+        onClearSelection={handleClearSelection}
         theme={theme}
         onThemeChange={setTheme}
+        animationStyle={animationStyle}
+        onAnimationStyleChange={setAnimationStyle}
       />
     </div>
   );
