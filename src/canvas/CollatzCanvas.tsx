@@ -1,10 +1,12 @@
 /**
  * Main PixiJS canvas component.
  * Renders the infinite zoomable Collatz tree with:
+ * - Continuous zoom emergence (details smoothly appear/disappear)
  * - Arrow pulse animations
  * - Path tracing (click to highlight journey to 1)
  * - Smooth camera transitions
- * - Zoom-dependent detail levels
+ * - Edge operation labels (÷2, 3n+1)
+ * - Even/odd detail rings and step badges at close zoom
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -15,13 +17,15 @@ import { buildInverseTree, getEdges, isPowerOf2 } from '../engine/collatz';
 import type { CollatzNode } from '../engine/collatz';
 import { layoutTree } from '../layout/reingold-tilford';
 import type { LayoutNode } from '../layout/reingold-tilford';
-import { renderNodes, updateNodeLOD } from './nodes';
+import { renderNodes, updateNodeZoom } from './nodes';
 import { renderArrows } from './arrows';
 import { ArrowAnimationSystem } from './animation';
 import type { AnimationStyle } from './animation';
 import { createPathTrace } from './pathTrace';
 import type { PathTraceResult } from './pathTrace';
 import { CameraSystem } from './camera';
+import { createEdgeLabels } from './edgeLabels';
+import type { EdgeLabelSystem } from './edgeLabels';
 
 interface CollatzCanvasProps {
   theme?: string;
@@ -57,6 +61,7 @@ export default function CollatzCanvas({
   const animSystemRef = useRef<ArrowAnimationSystem | null>(null);
   const cameraRef = useRef<CameraSystem | null>(null);
   const pathTraceRef = useRef<PathTraceResult | null>(null);
+  const edgeLabelsRef = useRef<EdgeLabelSystem | null>(null);
   const [isReady, setIsReady] = useState(false);
 
   const theme = THEMES[themeName] ?? THEMES['midnight']!;
@@ -107,6 +112,11 @@ export default function CollatzCanvas({
       world.addChild(animSystem.displayObject);
       animSystemRef.current = animSystem;
 
+      // Edge operation labels (÷2, 3n+1) — emerge at close zoom
+      const edgeLabels = createEdgeLabels(edges, layout.nodes, theme);
+      world.addChild(edgeLabels.container);
+      edgeLabelsRef.current = edgeLabels;
+
       // Path trace layer
       // (inserted dynamically when a path is traced)
 
@@ -134,6 +144,10 @@ export default function CollatzCanvas({
         world.y = app.screen.height * 0.85 - rootLayout.y;
       }
 
+      // Initial zoom emergence pass
+      updateNodeZoom(1.0, theme);
+      edgeLabels.update(1.0);
+
       // Set up camera system
       const camera = new CameraSystem(
         world,
@@ -144,13 +158,15 @@ export default function CollatzCanvas({
             stateRef.current.viewport = { x: world.x, y: world.y, scale: newScale };
             stateRef.current.zoomLevel = getZoomLevel(newScale);
           }
-          updateNodeLOD(nodeContainer, getZoomLevel(newScale), theme);
+          // Continuous zoom emergence — smooth transitions
+          updateNodeZoom(newScale, theme);
+          edgeLabels.update(newScale);
         },
       );
       cameraRef.current = camera;
 
       // Set up pan and zoom
-      setupInteraction(app, world, stateRef, nodeContainer, theme, camera);
+      setupInteraction(app, world, stateRef, theme, camera, edgeLabels);
 
       // Main animation ticker
       app.ticker.add((ticker) => {
@@ -177,6 +193,7 @@ export default function CollatzCanvas({
           getNodeCount: () => treeNodes.size,
           getAnimationStyle: () => animSystem.style,
           getPathTrace: () => pathTraceRef.current?.sequence ?? null,
+          getEdgeLabelCount: () => edgeLabels.container.children.length,
           getVisibleNodes: () => {
             const state = stateRef.current;
             if (!state || !appRef.current) return 0;
@@ -209,6 +226,10 @@ export default function CollatzCanvas({
       if (pathTraceRef.current) {
         pathTraceRef.current.destroy();
         pathTraceRef.current = null;
+      }
+      if (edgeLabelsRef.current) {
+        edgeLabelsRef.current.destroy();
+        edgeLabelsRef.current = null;
       }
       if (appRef.current) {
         const canvas = appRef.current.canvas as HTMLCanvasElement;
@@ -259,10 +280,8 @@ export default function CollatzCanvas({
     const selected: number = selectedNumber;
     const trace = createPathTrace(selected, state.layoutNodes, theme);
     if (trace) {
-      // Insert trace layer between arrows (index 0) and animation (index 1)
-      // Actually: arrows=0, animation=1, nodes=2
-      // We want trace between animation and nodes: index 2
-      world.addChildAt(trace.container, Math.min(2, world.children.length));
+      // Insert trace between edge labels and nodes
+      world.addChildAt(trace.container, Math.min(3, world.children.length));
       pathTraceRef.current = trace;
     }
 
@@ -296,16 +315,14 @@ function setupInteraction(
   app: Application,
   world: Container,
   stateRef: React.MutableRefObject<CanvasState | null>,
-  nodeContainer: Container,
   theme: Theme,
   camera: CameraSystem,
+  edgeLabels: EdgeLabelSystem,
 ) {
   const canvas = app.canvas as HTMLCanvasElement;
   let isDragging = false;
   let lastX = 0;
   let lastY = 0;
-  let dragStartX = 0;
-  let dragStartY = 0;
 
   // Mouse wheel zoom
   canvas.addEventListener('wheel', (e) => {
@@ -335,8 +352,9 @@ function setupInteraction(
       stateRef.current.zoomLevel = getZoomLevel(newScale);
     }
 
-    // Update LOD
-    updateNodeLOD(nodeContainer, getZoomLevel(newScale), theme);
+    // Continuous zoom emergence
+    updateNodeZoom(newScale, theme);
+    edgeLabels.update(newScale);
   }, { passive: false });
 
   // Pan with mouse drag
@@ -344,8 +362,6 @@ function setupInteraction(
     isDragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
 
     // Cancel camera animation when user grabs the canvas
@@ -417,7 +433,10 @@ function setupInteraction(
           stateRef.current.viewport = { x: world.x, y: world.y, scale: newScale };
           stateRef.current.zoomLevel = getZoomLevel(newScale);
         }
-        updateNodeLOD(nodeContainer, getZoomLevel(newScale), theme);
+
+        // Continuous zoom emergence
+        updateNodeZoom(newScale, theme);
+        edgeLabels.update(newScale);
       }
 
       lastTouchDist = dist;
