@@ -8,7 +8,7 @@
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { collatzSequence, isPowerOf2 } from '../engine/collatz';
+import { collatzSequence, isPowerOf2, getPathEdgeKeys } from '../engine/collatz';
 import type { LayoutNode } from '../layout/reingold-tilford';
 import type { Theme } from '../types';
 
@@ -175,16 +175,5 @@ function drawNodeRings(
   }
 }
 
-/**
- * Compute which edges in the tree belong to a path trace.
- * Returns a Set of "from→to" keys for fast lookup.
- */
-export function getPathEdgeKeys(sequence: number[]): Set<string> {
-  const keys = new Set<string>();
-  for (let i = 0; i < sequence.length - 1; i++) {
-    keys.add(`${sequence[i]}→${sequence[i + 1]}`);
-    // Also add reverse since tree edges go child→parent
-    keys.add(`${sequence[i + 1]}→${sequence[i]}`);
-  }
-  return keys;
-}
+// getPathEdgeKeys is re-exported from engine/collatz.ts (pure logic, no PixiJS)
+export { getPathEdgeKeys } from '../engine/collatz';

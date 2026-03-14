@@ -186,3 +186,17 @@ export function getSpine(maxValue: number): number[] {
   }
   return spine;
 }
+
+/**
+ * Compute which edges belong to a Collatz path.
+ * Returns a Set of "from→to" keys for fast lookup.
+ * Both directions are included since tree edges go child→parent.
+ */
+export function getPathEdgeKeys(sequence: number[]): Set<string> {
+  const keys = new Set<string>();
+  for (let i = 0; i < sequence.length - 1; i++) {
+    keys.add(`${sequence[i]}→${sequence[i + 1]}`);
+    keys.add(`${sequence[i + 1]}→${sequence[i]}`);
+  }
+  return keys;
+}

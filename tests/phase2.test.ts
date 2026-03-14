@@ -5,9 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { collatzSequence, buildInverseTree, isPowerOf2 } from '../src/engine/collatz';
+import { collatzSequence, buildInverseTree, isPowerOf2, getPathEdgeKeys } from '../src/engine/collatz';
 import { layoutTree } from '../src/layout/reingold-tilford';
-import { getPathEdgeKeys } from '../src/canvas/pathTrace';
 
 // ── Path tracing logic ────────────────────────────────────────────────
 
