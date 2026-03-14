@@ -1,7 +1,7 @@
 /**
  * Phase 2: Life & Motion tests.
  *
- * Tests for animation system, path tracing, and camera.
+ * Tests for animation system, path tracing, camera, and spine shear layout.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -50,6 +50,80 @@ describe('path tracing', () => {
   });
 });
 
+// ── Layout: spine shear at 30° ────────────────────────────────────────
+
+describe('layout spine shear', () => {
+  const tree = buildInverseTree(5000, 40);
+  const layout = layoutTree(tree, 80);
+
+  it('spine nodes grow upward (decreasing y)', () => {
+    const spineValues = [1, 2, 4, 8, 16, 32, 64, 128];
+    for (let i = 0; i < spineValues.length - 1; i++) {
+      const nodeA = layout.nodes.get(spineValues[i]!);
+      const nodeB = layout.nodes.get(spineValues[i + 1]!);
+      if (nodeA && nodeB) {
+        expect(nodeB.y).toBeLessThan(nodeA.y);
+      }
+    }
+  });
+
+  it('spine leans left (x decreases with depth)', () => {
+    // With the 30° shear, deeper spine nodes should have smaller x
+    const node1 = layout.nodes.get(1)!;
+    const node16 = layout.nodes.get(16)!;
+    const node64 = layout.nodes.get(64)!;
+
+    expect(node16.x).toBeLessThan(node1.x);
+    expect(node64.x).toBeLessThan(node16.x);
+  });
+
+  it('spine angle is approximately 30° from vertical', () => {
+    // Measure angle between consecutive spine nodes
+    const node1 = layout.nodes.get(1)!;
+    const node2 = layout.nodes.get(2)!;
+
+    const dx = Math.abs(node2.x - node1.x);
+    const dy = Math.abs(node2.y - node1.y);
+    const angleDeg = Math.atan2(dx, dy) * (180 / Math.PI);
+
+    // Should be close to 30° (allow some tolerance for RT adjustments)
+    expect(angleDeg).toBeGreaterThan(25);
+    expect(angleDeg).toBeLessThan(35);
+  });
+
+  it('right children are to the right of their parent', () => {
+    // Node 5 is right child of 16, should be to the right
+    const node16 = layout.nodes.get(16)!;
+    const node5 = layout.nodes.get(5);
+
+    if (node5) {
+      expect(node5.x).toBeGreaterThan(node16.x);
+    }
+  });
+
+  it('left children (2x) are to the left of right siblings ((x-1)/3)', () => {
+    // At node 16: left=32, right=5
+    const node32 = layout.nodes.get(32)!;
+    const node5 = layout.nodes.get(5);
+
+    if (node5) {
+      expect(node32.x).toBeLessThan(node5.x);
+    }
+  });
+
+  it('all nodes have finite positions', () => {
+    for (const node of layout.nodes.values()) {
+      expect(isFinite(node.x)).toBe(true);
+      expect(isFinite(node.y)).toBe(true);
+    }
+  });
+
+  it('bounds are valid', () => {
+    expect(layout.bounds.minX).toBeLessThan(layout.bounds.maxX);
+    expect(layout.bounds.minY).toBeLessThan(layout.bounds.maxY);
+  });
+});
+
 // ── Layout compatibility with path tracing ────────────────────────────
 
 describe('layout has path nodes', () => {
@@ -57,10 +131,8 @@ describe('layout has path nodes', () => {
   const layout = layoutTree(tree, 80);
 
   it('all sequence nodes for small numbers are in tree', () => {
-    // For numbers in the tree, their Collatz paths should mostly be in the tree
     for (const testVal of [3, 5, 7, 10, 20, 42]) {
       const seq = collatzSequence(testVal);
-      // At minimum, 1, 2, 4 should always be in the layout
       expect(layout.nodes.has(1)).toBe(true);
       expect(layout.nodes.has(2)).toBe(true);
       expect(layout.nodes.has(4)).toBe(true);
@@ -68,13 +140,11 @@ describe('layout has path nodes', () => {
   });
 
   it('layout preserves spine ordering', () => {
-    // Spine nodes should have decreasing y (growing upward from root)
     const spineValues = [1, 2, 4, 8, 16, 32, 64];
     for (let i = 0; i < spineValues.length - 1; i++) {
       const nodeA = layout.nodes.get(spineValues[i]!);
       const nodeB = layout.nodes.get(spineValues[i + 1]!);
       if (nodeA && nodeB) {
-        // nodeB should have smaller y (higher up, since y is negative for deeper nodes)
         expect(nodeB.y).toBeLessThan(nodeA.y);
       }
     }
@@ -95,20 +165,17 @@ describe('animation styles', () => {
 // ── Camera math ───────────────────────────────────────────────────────
 
 describe('camera calculations', () => {
-  it('ease-out quintic approaches 1 monotonically', () => {
-    // Verify our easing function is well-behaved
+  it('ease-out quartic approaches 1 monotonically', () => {
     let prev = 0;
     for (let t = 0; t <= 1; t += 0.05) {
       const ease = 1 - Math.pow(1 - t, 4);
       expect(ease).toBeGreaterThanOrEqual(prev);
       prev = ease;
     }
-    // At t=1, ease should be exactly 1
     expect(1 - Math.pow(0, 4)).toBe(1);
   });
 
   it('ease-out starts slow and ends fast at destination', () => {
-    // At t=0.5, easing should be past halfway (it accelerates into the target)
     const halfwayEase = 1 - Math.pow(0.5, 4);
     expect(halfwayEase).toBeGreaterThan(0.5);
     expect(halfwayEase).toBeLessThan(1);
