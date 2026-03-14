@@ -2,6 +2,9 @@
  * Shared types for the Collatz Explorer.
  */
 
+// Re-export animation types for convenience
+export type { AnimationStyle } from './canvas/animation';
+
 /** Visual theme configuration */
 export interface Theme {
   name: string;

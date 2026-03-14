@@ -1,6 +1,10 @@
 /**
  * Main PixiJS canvas component.
- * Renders the infinite zoomable Collatz tree.
+ * Renders the infinite zoomable Collatz tree with:
+ * - Arrow pulse animations
+ * - Path tracing (click to highlight journey to 1)
+ * - Smooth camera transitions
+ * - Zoom-dependent detail levels
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -13,12 +17,18 @@ import { layoutTree } from '../layout/reingold-tilford';
 import type { LayoutNode } from '../layout/reingold-tilford';
 import { renderNodes, updateNodeLOD } from './nodes';
 import { renderArrows } from './arrows';
+import { ArrowAnimationSystem } from './animation';
+import type { AnimationStyle } from './animation';
+import { createPathTrace } from './pathTrace';
+import type { PathTraceResult } from './pathTrace';
+import { CameraSystem } from './camera';
 
 interface CollatzCanvasProps {
   theme?: string;
   onNodeClick?: (value: number) => void;
   jumpToNumber?: number | null;
   selectedNumber?: number | null;
+  animationStyle?: AnimationStyle;
 }
 
 // Canvas state exposed for external access
@@ -38,11 +48,15 @@ export default function CollatzCanvas({
   onNodeClick,
   jumpToNumber,
   selectedNumber,
+  animationStyle = 'flow',
 }: CollatzCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
   const stateRef = useRef<CanvasState | null>(null);
+  const animSystemRef = useRef<ArrowAnimationSystem | null>(null);
+  const cameraRef = useRef<CameraSystem | null>(null);
+  const pathTraceRef = useRef<PathTraceResult | null>(null);
   const [isReady, setIsReady] = useState(false);
 
   const theme = THEMES[themeName] ?? THEMES['midnight']!;
@@ -83,8 +97,18 @@ export default function CollatzCanvas({
       worldRef.current = world;
 
       // Render arrows first (behind nodes)
-      const arrowContainer = renderArrows(edges, layout.nodes, theme);
+      const { container: arrowContainer, arrowData } = renderArrows(edges, layout.nodes, theme);
       world.addChild(arrowContainer);
+
+      // Animation overlay (between arrows and nodes)
+      const animSystem = new ArrowAnimationSystem(theme);
+      animSystem.setArrows(arrowData);
+      animSystem.style = animationStyle;
+      world.addChild(animSystem.displayObject);
+      animSystemRef.current = animSystem;
+
+      // Path trace layer
+      // (inserted dynamically when a path is traced)
 
       // Render nodes on top
       const nodeContainer = renderNodes(
@@ -110,8 +134,39 @@ export default function CollatzCanvas({
         world.y = app.screen.height * 0.85 - rootLayout.y;
       }
 
+      // Set up camera system
+      const camera = new CameraSystem(
+        world,
+        app.screen.width,
+        app.screen.height,
+        (newScale) => {
+          if (stateRef.current) {
+            stateRef.current.viewport = { x: world.x, y: world.y, scale: newScale };
+            stateRef.current.zoomLevel = getZoomLevel(newScale);
+          }
+          updateNodeLOD(nodeContainer, getZoomLevel(newScale), theme);
+        },
+      );
+      cameraRef.current = camera;
+
       // Set up pan and zoom
-      setupInteraction(app, world, stateRef, nodeContainer, theme);
+      setupInteraction(app, world, stateRef, nodeContainer, theme, camera);
+
+      // Main animation ticker
+      app.ticker.add((ticker) => {
+        const dt = ticker.deltaMS / 1000; // convert to seconds
+
+        // Arrow animations
+        animSystem.tick(dt);
+
+        // Camera transitions
+        camera.tick();
+
+        // Path trace animation
+        if (pathTraceRef.current) {
+          pathTraceRef.current.tick(performance.now() / 1000);
+        }
+      });
 
       setIsReady(true);
 
@@ -120,8 +175,9 @@ export default function CollatzCanvas({
         (window as unknown as Record<string, unknown>).__collatz_test = {
           getState: () => stateRef.current,
           getNodeCount: () => treeNodes.size,
+          getAnimationStyle: () => animSystem.style,
+          getPathTrace: () => pathTraceRef.current?.sequence ?? null,
           getVisibleNodes: () => {
-            // Count nodes within viewport bounds
             const state = stateRef.current;
             if (!state || !appRef.current) return 0;
             const app = appRef.current;
@@ -146,6 +202,14 @@ export default function CollatzCanvas({
 
     return () => {
       destroyed = true;
+      if (animSystemRef.current) {
+        animSystemRef.current.destroy();
+        animSystemRef.current = null;
+      }
+      if (pathTraceRef.current) {
+        pathTraceRef.current.destroy();
+        pathTraceRef.current = null;
+      }
       if (appRef.current) {
         const canvas = appRef.current.canvas as HTMLCanvasElement;
         canvas.parentElement?.removeChild(canvas);
@@ -156,46 +220,58 @@ export default function CollatzCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themeName]);
 
-  // Handle jumpToNumber
+  // Handle animation style changes
+  useEffect(() => {
+    if (animSystemRef.current) {
+      animSystemRef.current.style = animationStyle;
+    }
+  }, [animationStyle]);
+
+  // Handle jumpToNumber — smooth camera fly-to
   useEffect(() => {
     if (!jumpToNumber || !worldRef.current || !stateRef.current || !appRef.current) return;
 
     const layoutNode = stateRef.current.layoutNodes.get(jumpToNumber);
     if (!layoutNode) return;
 
-    const world = worldRef.current;
-    const app = appRef.current;
-
-    // Animate to the target node
-    const targetX = app.screen.width / 2 - layoutNode.x * world.scale.x;
-    const targetY = app.screen.height / 2 - layoutNode.y * world.scale.y;
-
-    // Simple animation
-    const startX = world.x;
-    const startY = world.y;
-    const duration = 500;
-    const startTime = Date.now();
-
-    function animate() {
-      const elapsed = Date.now() - startTime;
-      const t = Math.min(elapsed / duration, 1);
-      const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
-
-      world.x = startX + (targetX - startX) * ease;
-      world.y = startY + (targetY - startY) * ease;
-
-      if (t < 1) {
-        requestAnimationFrame(animate);
-      }
+    const camera = cameraRef.current;
+    if (camera) {
+      camera.flyToNode(layoutNode.x, layoutNode.y, 800);
     }
-    animate();
   }, [jumpToNumber]);
 
-  // Handle selectedNumber highlight
+  // Handle selectedNumber — path tracing
   useEffect(() => {
-    // Highlight logic would update node visuals here
-    // For Phase 1, we'll handle this via node rendering updates
-  }, [selectedNumber]);
+    const world = worldRef.current;
+    const state = stateRef.current;
+    if (!world || !state) return;
+
+    // Clear previous trace
+    if (pathTraceRef.current) {
+      world.removeChild(pathTraceRef.current.container);
+      pathTraceRef.current.destroy();
+      pathTraceRef.current = null;
+    }
+
+    if (selectedNumber == null) return;
+
+    // Create new path trace
+    const selected: number = selectedNumber;
+    const trace = createPathTrace(selected, state.layoutNodes, theme);
+    if (trace) {
+      // Insert trace layer between arrows (index 0) and animation (index 1)
+      // Actually: arrows=0, animation=1, nodes=2
+      // We want trace between animation and nodes: index 2
+      world.addChildAt(trace.container, Math.min(2, world.children.length));
+      pathTraceRef.current = trace;
+    }
+
+    // Fly camera to the selected node
+    const layoutNode = state.layoutNodes.get(selected);
+    if (layoutNode && cameraRef.current) {
+      cameraRef.current.flyToNode(layoutNode.x, layoutNode.y, 600);
+    }
+  }, [selectedNumber, theme]);
 
   return (
     <div
@@ -222,15 +298,22 @@ function setupInteraction(
   stateRef: React.MutableRefObject<CanvasState | null>,
   nodeContainer: Container,
   theme: Theme,
+  camera: CameraSystem,
 ) {
   const canvas = app.canvas as HTMLCanvasElement;
   let isDragging = false;
   let lastX = 0;
   let lastY = 0;
+  let dragStartX = 0;
+  let dragStartY = 0;
 
   // Mouse wheel zoom
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+
+    // Cancel camera animation on manual interaction
+    camera.cancel();
+
     const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.max(0.02, Math.min(10, world.scale.x * scaleFactor));
 
@@ -261,7 +344,12 @@ function setupInteraction(
     isDragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
+
+    // Cancel camera animation when user grabs the canvas
+    camera.cancel();
   });
 
   canvas.addEventListener('pointermove', (e) => {
@@ -293,6 +381,7 @@ function setupInteraction(
 
   canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
+      camera.cancel();
       const dx = e.touches[1]!.clientX - e.touches[0]!.clientX;
       const dy = e.touches[1]!.clientY - e.touches[0]!.clientY;
       lastTouchDist = Math.sqrt(dx * dx + dy * dy);
